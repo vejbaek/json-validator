@@ -12,7 +12,7 @@ is $errors[0], '/properties/should_fail: Expected object - got array.', 'invalid
 
 # ...but can still be used to validate data.
 @errors = $should_fail->validate({foo => 123});
-is int(@errors), 0, 'data is valid';
+is "@errors", "", "data is valid";
 
 # Can also use load_and_validate_schema() to do the same as above
 eval { JSON::Validator->new->load_and_validate_schema('data://main/invalid.json') };

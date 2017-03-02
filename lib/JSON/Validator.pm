@@ -341,20 +341,20 @@ sub _validate {
     return @errors if @errors;
   }
 
-  if (my $rules = $schema->{not}) {
-    push @errors, $self->_validate($data, $path, $rules);
+  if (_has_data($schema->{not})) {
+    push @errors, $self->_validate($data, $path, $schema->{not});
     warn "[JSON::Validator] not @{[$path||'/']} == [@errors]\n" if DEBUG == 2;
     return @errors ? () : (E $path, 'Should not match.');
   }
 
-  if (my $rules = $schema->{allOf}) {
-    push @errors, $self->_validate_all_of($data, $path, $rules);
+  if (_has_data($schema->{allOf})) {
+    push @errors, $self->_validate_all_of($data, $path, $schema->{allOf});
   }
-  elsif ($rules = $schema->{anyOf}) {
-    push @errors, $self->_validate_any_of($data, $path, $rules);
+  elsif (_has_data($schema->{anyOf})) {
+    push @errors, $self->_validate_any_of($data, $path, $schema->{anyOf});
   }
-  elsif ($rules = $schema->{oneOf}) {
-    push @errors, $self->_validate_one_of($data, $path, $rules);
+  elsif (_has_data($schema->{oneOf})) {
+    push @errors, $self->_validate_one_of($data, $path, $schema->{oneOf});
   }
 
   return @errors;
@@ -383,11 +383,13 @@ sub _validate_all_of {
 sub _validate_any_of {
   my ($self, $data, $path, $rules) = @_;
   my $type = _guess_data_type($data);
-  my (@e, @errors, @expected);
+  my ($dup, @e, @errors, @expected);
 
   for my $rule (@$rules) {
+    $dup = ref $data eq 'HASH' ? {%$data} : $data;
     @e = $self->_validate($data, $path, $rule);
     if (!@e) {
+      _write_back($dup, $data) if ref $data eq 'HASH';
       warn "[JSON::Validator] anyOf @{[$path||'/']} == success\n" if DEBUG == 2;
       return;
     }
@@ -405,16 +407,22 @@ sub _validate_any_of {
 sub _validate_one_of {
   my ($self, $data, $path, $rules) = @_;
   my $type = _guess_data_type($data);
-  my (@errors, @expected);
+  my (@errors, @expected, @success);
 
   for my $rule (@$rules) {
-    my @e = $self->_validate($data, $path, $rule) or next;
-    my $schema_type = _guess_schema_type($rule);
-    push @errors, [@e] and next if !$schema_type or $schema_type eq $type;
-    push @expected, $schema_type;
+    my $dup = ref $data eq 'HASH' ? {%$data} : $data;
+    if (my @e = $self->_validate($dup, $path, $rule)) {
+      my $schema_type = _guess_schema_type($rule);
+      push @errors, [@e] and next if !$schema_type or $schema_type eq $type;
+      push @expected, $schema_type;
+    }
+    else {
+      push @success, $dup;
+    }
   }
 
-  if (@errors + @expected + 1 == @$rules) {
+  if (@success == 1) {
+    _write_back($success[0], $data) if ref $data eq 'HASH';
     warn "[JSON::Validator] oneOf @{[$path||'/']} == success\n" if DEBUG == 2;
     return;
   }
@@ -622,8 +630,7 @@ sub _validate_type_object {
   for my $k (keys %rules) {
     for my $r (@{$rules{$k}}) {
       if (!exists $data->{$k} and (ref $r eq 'HASH' and exists $r->{default})) {
-
-        #$data->{$k} = $r->{default}; # TODO: This seems to fail when using oneOf and friends
+        $data->{$k} = $r->{default};
       }
       elsif (exists $data->{$k}) {
         my @e = $self->_validate($data->{$k}, _path($path, $k), $r);
@@ -708,14 +715,14 @@ sub _guess_data_type {
 
 sub _guess_schema_type {
   return $_[0]->{type} if $_[0]->{type};
-  return _guessed_right($_[1], 'object') if $_[0]->{additionalProperties};
-  return _guessed_right($_[1], 'object') if $_[0]->{patternProperties};
-  return _guessed_right($_[1], 'object') if $_[0]->{properties};
+  return _guessed_right($_[1], 'object') if _has_boolean_or_data($_[0]->{additionalProperties});
+  return _guessed_right($_[1], 'object') if _has_data($_[0]->{patternProperties});
+  return _guessed_right($_[1], 'object') if _has_data($_[0]->{properties});
   return _guessed_right($_[1], 'object')
     if defined $_[0]->{maxProperties}
     or defined $_[0]->{minProperties};
-  return _guessed_right($_[1], 'array')  if $_[0]->{additionalItems};
-  return _guessed_right($_[1], 'array')  if $_[0]->{items};
+  return _guessed_right($_[1], 'array')  if _has_boolean_or_data($_[0]->{additionalItems});
+  return _guessed_right($_[1], 'array')  if _has_data($_[0]->{items});
   return _guessed_right($_[1], 'array')  if $_[0]->{uniqueItems};
   return _guessed_right($_[1], 'array')  if defined $_[0]->{maxItems} or defined $_[0]->{minItems};
   return _guessed_right($_[1], 'string') if $_[0]->{pattern};
@@ -731,6 +738,18 @@ sub _guess_schema_type {
 sub _guessed_right {
   return $_[1] unless defined $_[0];
   return _guess_data_type($_[0]) eq $_[1] ? $_[1] : undef;
+}
+
+sub _has_boolean_or_data {
+  return !!@{$_[0]} if ref $_[0] eq 'ARRAY';
+  return !!%{$_[0]} if ref $_[0] eq 'HASH';
+  return defined $_[0];
+}
+
+sub _has_data {
+  return !!@{$_[0]} if ref $_[0] eq 'ARRAY';
+  return !!%{$_[0]} if ref $_[0] eq 'HASH';
+  return 0;
 }
 
 sub _is_date_time {
@@ -789,6 +808,11 @@ sub _path {
 sub _uniq {
   my %uniq;
   grep { !$uniq{$_}++ } @_;
+}
+
+sub _write_back {
+  my ($src, $dst) = @_;
+  $dst->{$_} = $src->{$_} for grep { !exists $dst->{$_} } keys %$src;
 }
 
 # Please report if you need to manually monkey patch this function
