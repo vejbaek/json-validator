@@ -5,10 +5,12 @@ use Mojo::Util qw(deprecated monkey_patch);
 use Scalar::Util ();
 
 use constant DEBUG => $ENV{JSON_VALIDATOR_DEBUG} || 0;
-use constant IV_SIZE           => eval 'require Config;$Config::Config{ivsize}';
-use constant SPECIFICATION_URL => 'http://swagger.io/v2/schema.json';
+use constant IV_SIZE => eval 'require Config;$Config::Config{ivsize}';
 
 my %COLLECTION_RE = (pipes => qr{\|}, csv => qr{,}, ssv => qr{\s}, tsv => qr{\t});
+
+our %VERSIONS
+  = (v2 => 'http://swagger.io/v2/schema.json', v3 => 'http://swagger.io/v3/schema.json');
 
 has _json_validator => sub { state $v = JSON::Validator->new; };
 
@@ -16,7 +18,9 @@ sub load_and_validate_schema {
   my ($self, $spec, $args) = @_;
 
   $spec = $self->bundle({replace => 1, schema => $spec}) if $args->{allow_invalid_ref};
-  local $args->{schema} = $args->{schema} || SPECIFICATION_URL;
+  local $args->{schema}
+    = $args->{schema} ? $VERSIONS{$args->{schema}} || $args->{schema} : $VERSIONS{v2};
+  $self->_build_formats_for_v3 if $args->{schema} and $args->{schema} eq $VERSIONS{v3};
   $self->SUPER::load_and_validate_schema($spec, $args);
 
   if (my $class = $args->{version_from_class}) {
@@ -267,6 +271,14 @@ sub _build_formats {
   $formats->{int64}    = IV_SIZE >= 8 ? sub { _is_number($_[0], 'q'); } : sub {1};
   $formats->{password} = sub {1};
   $formats;
+}
+
+sub _build_formats_for_v3 {
+  my $self    = shift;
+  my $formats = $self->formats;
+
+  # TODO
+  $formats->{uriref} = sub {'TODO'};
 }
 
 sub _coerce_by_collection_format {
