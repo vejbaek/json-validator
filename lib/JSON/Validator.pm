@@ -240,7 +240,7 @@ sub _load_schema {
 
   my $file = $url;
   $file =~ s!#$!!;
-  $file = path(split '/', $file);
+  $file = path($file);
   if (-e $file) {
     $file = $file->realpath;
     warn "[JSON::Validator] Loading schema from file: $file\n" if DEBUG;
